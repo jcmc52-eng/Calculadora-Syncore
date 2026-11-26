@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Calculadora · Ingreso</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <form class="card login" id="loginForm">
+    <div class="logo">=</div>
+    <h1>Calculadora</h1>
+    <p class="sub">Inicia sesión para continuar</p>
+    <input id="username" placeholder="Usuario" autocomplete="username" required>
+    <input id="password" type="password" placeholder="Clave" autocomplete="current-password" required>
+    <div class="error" id="error"></div>
+    <button class="btn btn-primary" type="submit">Ingresar</button>
+  </form>
+
+  <script>
+    document.getElementById("loginForm").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const err = document.getElementById("error");
+      err.textContent = "";
+      const res = await fetch("/api/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          username: document.getElementById("username").value.trim(),
+          password: document.getElementById("password").value,
+        }),
+      });
+      if (res.ok) {
+        location.href = "/";
+      } else {
+        const data = await res.json().catch(() => ({}));
+        err.textContent = data.detail || "Error al iniciar sesión";
+      }
+    });
+  </script>
+</body>
+</html>
