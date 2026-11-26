@@ -14,6 +14,8 @@ COPY app ./app
 
 RUN mkdir -p /app/data /app/exports
 
-EXPOSE 8000
+# Cloud Run inyecta PORT (por defecto 8080); en local se usa 8080 si no viene.
+ENV PORT=8080
+EXPOSE 8080
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT} --proxy-headers --forwarded-allow-ips='*'"]
