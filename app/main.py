@@ -3,6 +3,7 @@ import ast
 import hashlib
 import hmac
 import json
+import logging
 import operator
 import os
 import secrets
@@ -44,7 +45,11 @@ APP_PASSWORD = os.getenv("APP_PASSWORD", "")
 SECRET_KEY = os.getenv("SECRET_KEY") or secrets.token_hex(32)
 
 if not APP_PASSWORD:
-    raise RuntimeError("Define APP_PASSWORD en el archivo .env o como variable de entorno")
+    # No detenemos el servidor (Cloud Run lo marcaría como caído); sólo se bloquea el login.
+    logging.getLogger("uvicorn.error").warning(
+        "APP_PASSWORD no está definida: el inicio de sesión queda deshabilitado. "
+        "Defínela en .env o como variable de entorno."
+    )
 
 # Guardamos sólo el hash de la clave en memoria.
 _SALT = secrets.token_bytes(16)
@@ -52,6 +57,8 @@ _PWD_HASH = hashlib.pbkdf2_hmac("sha256", APP_PASSWORD.encode(), _SALT, 200_000)
 
 
 def verify_password(password: str) -> bool:
+    if not APP_PASSWORD:
+        return False
     candidate = hashlib.pbkdf2_hmac("sha256", password.encode(), _SALT, 200_000)
     return hmac.compare_digest(candidate, _PWD_HASH)
 
@@ -145,6 +152,8 @@ def login_page(request: Request):
 
 @app.post("/api/login")
 def login(body: LoginIn, request: Request):
+    if not APP_PASSWORD:
+        raise HTTPException(status_code=503, detail="Login no configurado: falta APP_PASSWORD en el servidor")
     user_ok = hmac.compare_digest(body.username, APP_USER)
     pwd_ok = verify_password(body.password)
     if not (user_ok and pwd_ok):
