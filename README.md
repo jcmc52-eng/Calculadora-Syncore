@@ -1,0 +1,2 @@
+# Calculadora-Syncore
+Calculadora Syncore
