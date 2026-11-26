@@ -22,10 +22,6 @@ async function api(path, opts = {}) {
     headers: { "Content-Type": "application/json" },
     ...opts,
   });
-  if (res.status === 401) {
-    location.href = "/login";
-    throw new Error("No autenticado");
-  }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.detail || "Error");
   return data;
@@ -113,14 +109,5 @@ document.getElementById("clearBtn").onclick = async () => {
   loadHistory();
 };
 
-document.getElementById("logoutBtn").onclick = async () => {
-  await api("/api/logout", { method: "POST" });
-  location.href = "/login";
-};
-
-(async () => {
-  const me = await api("/api/me");
-  document.getElementById("userPill").textContent = "👤 " + me.user;
-  render();
-  loadHistory();
-})();
+render();
+loadHistory();

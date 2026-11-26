@@ -1,21 +1,16 @@
-"""Calculadora simple con FastAPI: login, historial y exportación a JSON."""
+"""Calculadora simple con FastAPI: historial y exportación a JSON."""
 import ast
-import hashlib
-import hmac
 import json
-import logging
 import operator
 import os
-import secrets
 from datetime import datetime
 from pathlib import Path
 from threading import Lock
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-from starlette.middleware.sessions import SessionMiddleware
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = Path(os.getenv("DATA_DIR", BASE_DIR / "data"))
@@ -25,42 +20,6 @@ HISTORY_FILE = DATA_DIR / "history.json"
 
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 EXPORT_DIR.mkdir(parents=True, exist_ok=True)
-
-
-def _load_env(path: Path) -> None:
-    """Carga un .env sencillo (KEY=VALUE) sin dependencias extra."""
-    if not path.exists():
-        return
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if line and not line.startswith("#") and "=" in line:
-            key, value = line.split("=", 1)
-            os.environ.setdefault(key.strip(), value.strip())
-
-
-_load_env(BASE_DIR / ".env")
-
-APP_USER = os.getenv("APP_USER", "admin")
-APP_PASSWORD = os.getenv("APP_PASSWORD", "")
-SECRET_KEY = os.getenv("SECRET_KEY") or secrets.token_hex(32)
-
-if not APP_PASSWORD:
-    # No detenemos el servidor (Cloud Run lo marcaría como caído); sólo se bloquea el login.
-    logging.getLogger("uvicorn.error").warning(
-        "APP_PASSWORD no está definida: el inicio de sesión queda deshabilitado. "
-        "Defínela en .env o como variable de entorno."
-    )
-
-# Guardamos sólo el hash de la clave en memoria.
-_SALT = secrets.token_bytes(16)
-_PWD_HASH = hashlib.pbkdf2_hmac("sha256", APP_PASSWORD.encode(), _SALT, 200_000)
-
-
-def verify_password(password: str) -> bool:
-    if not APP_PASSWORD:
-        return False
-    candidate = hashlib.pbkdf2_hmac("sha256", password.encode(), _SALT, 200_000)
-    return hmac.compare_digest(candidate, _PWD_HASH)
 
 
 # ---------- Evaluador seguro de expresiones ----------
@@ -101,35 +60,23 @@ def safe_eval(expr: str) -> float:
 _lock = Lock()
 
 
-def _read_history() -> dict:
+def _read_history() -> list:
     if HISTORY_FILE.exists():
         try:
-            return json.loads(HISTORY_FILE.read_text(encoding="utf-8"))
+            data = json.loads(HISTORY_FILE.read_text(encoding="utf-8"))
+            return data if isinstance(data, list) else []
         except json.JSONDecodeError:
-            return {}
-    return {}
+            return []
+    return []
 
 
-def _write_history(data: dict) -> None:
-    HISTORY_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+def _write_history(items: list) -> None:
+    HISTORY_FILE.write_text(json.dumps(items, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 # ---------- App ----------
 app = FastAPI(title="Calculadora")
-app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY, same_site="strict", max_age=8 * 3600)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
-
-
-def current_user(request: Request) -> str:
-    user = request.session.get("user")
-    if not user:
-        raise HTTPException(status_code=401, detail="No autenticado")
-    return user
-
-
-class LoginIn(BaseModel):
-    username: str
-    password: str
 
 
 class CalcIn(BaseModel):
@@ -137,45 +84,18 @@ class CalcIn(BaseModel):
 
 
 @app.get("/")
-def index(request: Request):
-    if not request.session.get("user"):
-        return RedirectResponse("/login")
+def index():
     return FileResponse(STATIC_DIR / "index.html")
 
 
 @app.get("/login")
-def login_page(request: Request):
-    if request.session.get("user"):
-        return RedirectResponse("/")
-    return FileResponse(STATIC_DIR / "login.html")
-
-
-@app.post("/api/login")
-def login(body: LoginIn, request: Request):
-    if not APP_PASSWORD:
-        raise HTTPException(status_code=503, detail="Login no configurado: falta APP_PASSWORD en el servidor")
-    user_ok = hmac.compare_digest(body.username, APP_USER)
-    pwd_ok = verify_password(body.password)
-    if not (user_ok and pwd_ok):
-        raise HTTPException(status_code=401, detail="Usuario o clave incorrectos")
-    request.session["user"] = body.username
-    return {"ok": True, "user": body.username}
-
-
-@app.post("/api/logout")
-def logout(request: Request):
-    request.session.clear()
-    return {"ok": True}
-
-
-@app.get("/api/me")
-def me(request: Request):
-    return {"user": current_user(request)}
+def login_redirect():
+    # Compatibilidad con enlaces antiguos: el login ya no existe.
+    return RedirectResponse("/")
 
 
 @app.post("/api/calculate")
-def calculate(body: CalcIn, request: Request):
-    user = current_user(request)
+def calculate(body: CalcIn):
     try:
         result = safe_eval(body.expression)
     except ZeroDivisionError:
@@ -192,39 +112,33 @@ def calculate(body: CalcIn, request: Request):
         "timestamp": datetime.now().isoformat(timespec="seconds"),
     }
     with _lock:
-        data = _read_history()
-        data.setdefault(user, []).append(entry)
-        _write_history(data)
+        items = _read_history()
+        items.append(entry)
+        _write_history(items)
     return entry
 
 
 @app.get("/api/history")
-def history(request: Request):
-    user = current_user(request)
+def history():
     with _lock:
-        return {"history": _read_history().get(user, [])}
+        return {"history": _read_history()}
 
 
 @app.delete("/api/history")
-def clear_history(request: Request):
-    user = current_user(request)
+def clear_history():
     with _lock:
-        data = _read_history()
-        data[user] = []
-        _write_history(data)
+        _write_history([])
     return {"ok": True}
 
 
 @app.post("/api/save")
-def save_history(request: Request):
-    """Exporta el historial del usuario a un .json en la carpeta local exports/."""
-    user = current_user(request)
+def save_history():
+    """Exporta el historial a un .json en la carpeta local exports/."""
     with _lock:
-        items = _read_history().get(user, [])
+        items = _read_history()
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"historial_{user}_{stamp}.json"
+    filename = f"historial_{stamp}.json"
     payload = {
-        "usuario": user,
         "exportado": datetime.now().isoformat(timespec="seconds"),
         "total": len(items),
         "historial": items,
